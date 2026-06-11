@@ -1,0 +1,146 @@
+<h1><strong>Canvas LTI Link Updater</strong></h1>
+
+<ol>
+<li><a href="#h_U01OVERVIEW">Overview</a></li>
+<li><a href="#h_U02EXPORTS">Getting Your Two Export Files</a></li>
+<li><a href="#h_U03WEB">Using the Web Tool</a></li>
+<li><a href="#h_U04LOCAL">Running the Tool on Your Computer</a></li>
+<li><a href="#h_U05IMPORT">Importing Into Canvas</a></li>
+<li><a href="#h_U06REPORT">Understanding the Report</a></li>
+<li><a href="#h_U07TROUBLESHOOT">Troubleshooting &amp; Additional Information</a></li>
+</ol>
+
+<h2 id="h_U01OVERVIEW"><strong>Overview</strong></h2>
+
+<p>
+  MITx links in your Canvas course point to a specific version of your MITx course.
+  When a new version is created for a new semester, those links still point to the
+  old one. This tool takes your Canvas course export and returns a copy with every
+  MITx link pointing to the new version, plus a report of what changed.
+</p>
+
+<blockquote>
+  <p>
+    <strong>Note:</strong> Run this once per semester, after the new MITx course
+    version exists. If you're not sure it exists yet, email
+    <a href="mailto:mitx-support@mit.edu">mitx-support@mit.edu</a>.
+  </p>
+</blockquote>
+
+<h2 id="h_U02EXPORTS"><strong>Getting Your Two Export Files</strong></h2>
+
+<p><strong>Old Canvas course</strong> (the one with the MITx links):</p>
+<ol>
+  <li>In Canvas, go to Settings → Export Course Content</li>
+  <li>Select "Course" and click "Create Export"</li>
+  <li>Download the file (ends in <code>.imscc</code>)</li>
+</ol>
+
+<p><strong>New MITx course:</strong></p>
+<ol>
+  <li>In MITx Studio, open the new semester's course</li>
+  <li>Go to Tools → Export and click "Export Course Content"</li>
+  <li>Download the file (ends in <code>.tar.gz</code>)</li>
+</ol>
+
+<p>You don't need to rename or open either file — the tool identifies them automatically.</p>
+
+<h2 id="h_U03WEB"><strong>Using the Web Tool</strong></h2>
+
+<ol>
+  <li>Open the tool in your browser</li>
+  <li>Drag both files into the upload area, in any order, and click "Check Files"</li>
+  <li>Review the confirmation screen — it shows which course your links point to now and where they'll point after the update. <strong>If anything looks unexpected, cancel and re-export the correct course.</strong> Nothing is changed until you confirm.</li>
+  <li>Confirm, then download the updated file (ends in <code>_updated.imscc</code>) and, optionally, the report</li>
+</ol>
+
+<h2 id="h_U04LOCAL"><strong>Running the Tool on Your Computer</strong></h2>
+
+<p>
+  If your course files are too large for the web tool, or you prefer not to upload
+  them, you can run the same tool locally:
+</p>
+
+<ol>
+  <li>Put both export files in a folder (any file names are fine)</li>
+  <li>Open a terminal and run:
+<pre class="wysiwyg-code-block"><code>python cli.py /path/to/your/folder</code></pre></li>
+  <li>The updated file and report appear in that same folder</li>
+</ol>
+
+<blockquote>
+  <p>
+    <strong>Note:</strong> This requires Python on your computer and a copy of the
+    tool. Email <a href="mailto:mitx-support@mit.edu">mitx-support@mit.edu</a> for
+    help getting set up.
+  </p>
+</blockquote>
+
+<h2 id="h_U05IMPORT"><strong>Importing Into Canvas</strong></h2>
+
+<ol>
+  <li>In Canvas, open the <strong>new semester's</strong> course</li>
+  <li>Go to Settings → Import Course Content</li>
+  <li>Select "Canvas Course Export Package" and upload the <code>_updated.imscc</code> file</li>
+  <li>After the import, click a few MITx links in Student View to confirm they open the new course's content</li>
+</ol>
+
+<h2 id="h_U06REPORT"><strong>Understanding the Report</strong></h2>
+
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>MATCHED</strong></td>
+<td>Link found in the new MITx course and updated</td>
+<td>None</td>
+</tr>
+<tr>
+<td><strong>MISSING</strong></td>
+<td>Link points to content not found in the new MITx course; left unchanged</td>
+<td>Update or remove the link in Canvas manually</td>
+</tr>
+<tr>
+<td><strong>NEW_ONLY</strong></td>
+<td>The new MITx course has content with no Canvas link</td>
+<td>Optional — add a link if students should reach it from Canvas</td>
+</tr>
+</tbody>
+</table>
+
+<blockquote>
+  <p>
+    <strong>Note:</strong> The MITx tool configuration link (just
+    <code>https://lms.mitx.mit.edu</code>) always shows as MISSING. That's normal —
+    it isn't a content link.
+  </p>
+</blockquote>
+
+<h2 id="h_U07TROUBLESHOOT"><strong>Troubleshooting &amp; Additional Information</strong></h2>
+
+<h3>FAQs</h3>
+<ul>
+  <li>"No LTI links found"
+    <ul><li>You probably exported the new Canvas course instead of the old one — the MITx links live in last semester's course</li></ul>
+  </li>
+  <li>Many links show as MISSING
+    <ul><li>Usually the wrong MITx course was exported. Double-check the new course export and try again</li></ul>
+  </li>
+  <li>The tool warns the files look like the same course version
+    <ul><li>One of the exports came from the wrong place — re-export the <strong>old</strong> Canvas course and the <strong>new</strong> MITx course</li></ul>
+  </li>
+  <li>Links still point to the old course after importing
+    <ul><li>The original file was imported instead of the one ending in <code>_updated.imscc</code> — re-import the updated file</li></ul>
+  </li>
+</ul>
+
+<p>
+  For anything else, email <a href="mailto:mitx-support@mit.edu">mitx-support@mit.edu</a>
+  with a short description and, if you have it, the report from the tool.
+</p>

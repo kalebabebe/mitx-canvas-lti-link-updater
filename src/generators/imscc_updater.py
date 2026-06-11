@@ -86,6 +86,12 @@ class IMSCCUpdater:
                         file_path = os.path.join(root, file)
                         arcname = os.path.relpath(file_path, working_copy)
                         zf.write(file_path, arcname)
+                    # Preserve empty directories (e.g. wiki_content/)
+                    for d in dirs:
+                        dir_path = os.path.join(root, d)
+                        if not os.listdir(dir_path):
+                            arcname = os.path.relpath(dir_path, working_copy) + '/'
+                            zf.writestr(arcname, '')
 
             logger.info(f'Generated updated IMSCC with {self._update_count} URL updates: {output_path}')
             return output_path

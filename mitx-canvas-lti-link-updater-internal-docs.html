@@ -1,0 +1,221 @@
+<h1><strong>Canvas LTI Link Updater — Internal Documentation (ETs / Support / Maintenance)</strong></h1>
+
+<p><em>For the simplified course-team guide, see the companion article: "Canvas LTI Link Updater — User Guide". This document covers everything operational and technical: the CLI, architecture, hosting, deployment, and failure modes.</em></p>
+
+<ol>
+<li><a href="#h_I01OVERVIEW">Overview</a></li>
+<li><a href="#h_I02CLI">Local CLI Usage</a></li>
+<li><a href="#h_I03TARGET">Unverified Rewrite Mode (--target)</a></li>
+<li><a href="#h_I04RESULTS">Result Statuses (Technical)</a></li>
+<li><a href="#h_I05ARCH">Technical Architecture</a></li>
+<li><a href="#h_I06HOSTING">Hosting and Deployment</a></li>
+<li><a href="#h_I07ENV">Environment Variables and Configuration</a></li>
+<li><a href="#h_I08DEPS">Dependencies</a></li>
+<li><a href="#h_I09FAIL">Common Failure Modes and Diagnostics</a></li>
+<li><a href="#h_I10RESTART">How to Restart / Redeploy</a></li>
+<li><a href="#h_I11REPO">Code Repository and Contact</a></li>
+</ol>
+
+<hr />
+
+<h2 id="h_I01OVERVIEW"><strong>Overview</strong></h2>
+
+<p>The Canvas LTI Link Updater rewrites LTI (Learning Tools Interoperability) links in a Canvas course export so they point to a new edX course run. When an edX course is re-run or copied in Studio, block IDs are preserved but the course identifier (<code>course-v1:ORG+COURSE+RUN</code>) changes, so every Canvas LTI link to that course becomes stale. The tool parses both exports, matches links to blocks by block ID, rewrites matched URLs, and produces an updated <code>.imscc</code> plus an audit CSV.</p>
+
+<p>There are two front ends over the same pipeline:</p>
+<ul>
+<li><strong>Web app</strong> (Flask) — what course teams use; see the user guide.</li>
+<li><strong>CLI</strong> (<code>cli.py</code>) — folder-based local runs for ETs/support, large files, or when the hosted tool is down. Results are identical because both call the same parser/mapper/updater modules.</li>
+</ul>
+
+<h2 id="h_I02CLI"><strong>Local CLI Usage</strong></h2>
+
+<ol>
+<li>Put the Canvas export and the edX export in any folder. <strong>File names do not matter</strong>: the CLI identifies each file by content (ZIP containing <code>imsmanifest.xml</code> → Canvas; gzipped tar containing <code>course.xml</code> → edX).</li>
+<li>From the repository directory:
+<pre class="wysiwyg-code-block"><code>python cli.py /path/to/folder</code></pre></li>
+<li>Outputs land in the same folder (override with <code>-o /other/folder</code>):
+<ul>
+<li><code>&lt;name&gt;_updated.imscc</code> — the rewritten Canvas export</li>
+<li><code>lti_audit_report.csv</code> — all links, MISSING first</li>
+</ul></li>
+</ol>
+
+<p>Re-runs are safe: files ending in <code>_updated.imscc</code> are ignored as inputs.</p>
+
+<h2 id="h_I03TARGET"><strong>Unverified Rewrite Mode (--target)</strong></h2>
+
+<p>When no edX export of the new course is available but the new course is known to be an exact copy (Studio re-runs and export/import copies preserve block IDs), all LTI links can be rewritten to a target course ID without block verification:</p>
+
+<pre class="wysiwyg-code-block"><code>python cli.py /path/to/folder -t course-v1:MITx+ulmo_general_2+smoketest</code></pre>
+
+<p>Only a Canvas export needs to be present. Every link with a parseable course ID is rewritten to the target; links without one (e.g., the bare tool-configuration URL) are left unchanged and reported MISSING. The audit CSV carries an <code>UNVERIFIED REWRITE</code> warning. <strong>Prefer verified mode</strong>: it is the only way to catch links to blocks that were deleted or restructured. After an unverified rewrite, spot-check links post-import.</p>
+
+<h2 id="h_I04RESULTS"><strong>Result Statuses (Technical)</strong></h2>
+
+<table>
+<thead>
+<tr><th>Status</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>MATCHED</strong></td><td>Block ID from the Canvas LTI URL was found in the new course's block inventory (or rewritten in <code>--target</code> mode). URL updated in the output.</td></tr>
+<tr><td><strong>MISSING</strong></td><td>Block ID not found in the new course, or no <code>course-v1:</code>/<code>block-v1:</code> identifier could be parsed from the URL. URL left unchanged.</td></tr>
+<tr><td><strong>NEW_ONLY</strong></td><td>A linkable block (sequential or vertical) exists in the new course with no corresponding Canvas link. Informational; leaf components (problem/video/html) are deliberately excluded to keep the report readable.</td></tr>
+</tbody>
+</table>
+
+<p>Audit CSV columns: <code>status</code>, <code>resource_title</code>, <code>old_lti_url</code>, <code>new_lti_url</code>, <code>block_id</code>, <code>block_type</code>, <code>edx_location</code>, <code>notes</code>. Sorted MISSING → NEW_ONLY → MATCHED.</p>
+
+<h2 id="h_I05ARCH"><strong>Technical Architecture</strong></h2>
+
+<p>Five-phase pipeline, executed server-side in a single request (web) or sequentially (CLI):</p>
+
+<ol>
+<li><strong>Phase 1, Parse Canvas IMSCC:</strong> <code>CanvasLTIParser</code> extracts the IMSCC ZIP, parses <code>imsmanifest.xml</code> for LTI External Tool resources, reads each <code>basiclti_link.xml</code>, and also scans assignment XML files and <code>module_meta.xml</code> for additional LTI references. Each URL is parsed for edX identifiers (org, course, run, block_type, block_id) via <code>course-v1:</code>/<code>block-v1:</code> regex patterns.</li>
+<li><strong>Phase 2, Parse edX OLX:</strong> <code>OLXParser</code> extracts the <code>.tar.gz</code>, locates <code>course.xml</code>, reads org/course/run, and walks the hierarchy (chapter → sequential → vertical → components) to build the block inventory. The inventory includes chapters, sequentials, and verticals themselves — MITx LTI links most commonly target sequentials and verticals, not leaf components. macOS metadata files (<code>._*</code>, <code>__MACOSX</code>) are ignored.</li>
+<li><strong>Phase 3, Map links:</strong> <code>LTIMapper</code> matches each Canvas link to a block by block ID. Matched links get new URLs by replacing org/course/run while preserving block type and ID. Unmatched links → MISSING. Unlinked sequentials/verticals → NEW_ONLY.</li>
+<li><strong>Phase 4, Generate updated IMSCC:</strong> <code>IMSCCUpdater</code> copies the extracted directory, string-replaces old URLs in LTI XML files, sweeps all XML for remaining old course-v1/block-v1 references, and repackages as ZIP. Empty directories (e.g., <code>wiki_content/</code>) are preserved. The output is byte-identical to the input except for rewritten URLs.</li>
+<li><strong>Phase 5, Audit CSV:</strong> <code>generate_audit_csv()</code> writes the report sorted MISSING-first.</li>
+</ol>
+
+<h3><strong>Key Source Files</strong></h3>
+<table>
+<thead>
+<tr><th>File</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>app.py</code></td><td>Flask web app: uploads, preview/confirmation, orchestration, downloads</td></tr>
+<tr><td><code>cli.py</code></td><td>Folder-based CLI; content-based file detection; <code>--target</code> mode</td></tr>
+<tr><td><code>src/parsers/canvas_lti_parser.py</code></td><td>IMSCC LTI extraction; multiple IMS namespace versions, assignment-wrapped tools, ContextExternalTool items</td></tr>
+<tr><td><code>src/parsers/olx_parser.py</code></td><td>OLX block inventory with hierarchy context</td></tr>
+<tr><td><code>src/processors/lti_mapper.py</code></td><td>Matching and URL construction</td></tr>
+<tr><td><code>src/generators/imscc_updater.py</code></td><td>URL replacement and repackaging</td></tr>
+<tr><td><code>src/generators/audit_csv.py</code></td><td>CSV report</td></tr>
+<tr><td><code>templates/index.html</code></td><td>Single-page web UI</td></tr>
+</tbody>
+</table>
+
+<h3><strong>Data Flow Diagram</strong></h3>
+<pre class="wysiwyg-code-block"><code>Old Canvas .imscc          New edX .tar.gz
+        |                         |
+        v                         v
+ [CanvasLTIParser]          [OLXParser]
+  - Extracts LTI links       - Builds block inventory
+  - Parses edX URL parts      - Parses course hierarchy
+        |                         |
+        +----------+--------------+
+                   |
+                   v
+             [LTIMapper]
+  - Matches links by block_id
+  - Constructs new URLs
+  - Categorizes: MATCHED / MISSING / NEW_ONLY
+                   |
+          +--------+--------+
+          |                 |
+          v                 v
+   [IMSCCUpdater]    [audit_csv]
+  - Replaces URLs     - CSV report
+  - Repackages ZIP
+          |                 |
+          v                 v
+  Updated .imscc     lti_audit_report.csv</code></pre>
+
+<h3><strong>URL Matching Logic</strong></h3>
+<ul>
+<li><code>course-v1:{org}+{course}+{run}</code> in the URL path</li>
+<li><code>block-v1:{org}+{course}+{run}+type@{type}+block@{id}</code> in the URL path</li>
+<li><code>block-v1:...</code> in query string parameters (<code>usage_key</code>, <code>id</code>, <code>block_id</code>)</li>
+</ul>
+<p>Only org/course/run are replaced; block type and ID are preserved, since re-run/copied edX courses retain block IDs.</p>
+
+<h3><strong>Security Notes</strong></h3>
+<ul>
+<li><strong>Tar path traversal:</strong> the OLX parser rejects archive members with absolute paths or <code>..</code>.</li>
+<li><strong>Download path traversal:</strong> <code>/download/&lt;filename&gt;</code> sanitizes with <code>secure_filename()</code> and verifies the resolved path stays inside the output folder. Requests like <code>/download/../../etc/passwd</code> (including URL-encoded variants) are rejected. Do not weaken this when modifying the route.</li>
+<li>No outbound network requests; no credentials or database.</li>
+</ul>
+
+<h2 id="h_I06HOSTING"><strong>Hosting and Deployment</strong></h2>
+
+<p>Currently hosted on <strong>PythonAnywhere</strong>. <code>render.yaml</code> contains a Render configuration for future migration.</p>
+
+<h3><strong>PythonAnywhere</strong></h3>
+<ul>
+<li>Runs as a WSGI web application.</li>
+<li>Temp files in <code>/tmp/lti_uploads</code> and <code>/tmp/lti_outputs</code>, cleaned before each processing run.</li>
+<li>Practical file size limit ≈ 70 MB due to disk constraints. (Larger courses: use the CLI.)</li>
+</ul>
+
+<h3><strong>Render (Future)</strong></h3>
+<ul>
+<li>Python 3.11.7 runtime, auto-generated <code>SECRET_KEY</code>, health check at <code>/health</code>, gunicorn with 300-second timeout.</li>
+</ul>
+
+<h2 id="h_I07ENV"><strong>Environment Variables and Configuration</strong></h2>
+
+<table>
+<thead>
+<tr><th>Setting</th><th>Location</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>SECRET_KEY</code></td><td>Environment variable</td><td><code>dev-secret-change-in-production</code></td><td>Flask session secret; set a secure random value in production.</td></tr>
+<tr><td><code>PORT</code></td><td>Environment variable</td><td><code>5000</code></td><td>Port for local Flask dev server</td></tr>
+<tr><td><code>MAX_CONTENT_LENGTH</code></td><td><code>app.py</code></td><td>200 MB</td><td>Max upload size per file</td></tr>
+<tr><td><code>UPLOAD_FOLDER</code></td><td><code>app.py</code></td><td><code>/tmp/lti_uploads</code></td><td>Temp dir for uploads</td></tr>
+<tr><td><code>OUTPUT_FOLDER</code></td><td><code>app.py</code></td><td><code>/tmp/lti_outputs</code></td><td>Temp dir for generated outputs</td></tr>
+</tbody>
+</table>
+
+<h2 id="h_I08DEPS"><strong>Dependencies</strong></h2>
+
+<p>From <code>requirements.txt</code>: Flask ≥ 3.0.0 (web framework), gunicorn ≥ 21.2.0 (production WSGI server), Werkzeug ≥ 3.0.0 (secure filename handling). Everything else is Python standard library (<code>xml.etree.ElementTree</code>, <code>zipfile</code>, <code>tarfile</code>, <code>csv</code>, <code>urllib.parse</code>); BeautifulSoup/lxml are not required. Runtime: Python 3.11.7 (<code>runtime.txt</code>).</p>
+
+<pre class="wysiwyg-code-block"><code>pip install --upgrade -r requirements.txt</code></pre>
+
+<h2 id="h_I09FAIL"><strong>Common Failure Modes and Diagnostics</strong></h2>
+
+<h3><strong>Disk Space Exhaustion</strong></h3>
+<p>Both uploads are extracted to <code>/tmp</code>, and the IMSCC is copied to a working directory. A 70 MB IMSCC can need 200+ MB of temp space. The app cleans temp folders at the start of each request (<code>cleanup_tmp_folders()</code>) and after processing. If the server runs out of space, manually clear <code>/tmp/lti_uploads</code>, <code>/tmp/lti_outputs</code>, and any <code>/tmp/canvas_lti_*</code> or <code>/tmp/olx_parse_*</code> directories.</p>
+
+<h3><strong>IMS Namespace Version Mismatch</strong></h3>
+<p>Canvas IMSCC files can use IMS CC v1.1, v1.2, or v1.3 namespaces; the parser auto-detects from the root element. For a new namespace version, update <code>NAMESPACES</code> in <code>canvas_lti_parser.py</code>.</p>
+
+<h3><strong>Non-Standard LTI URL Formats</strong></h3>
+<p>Links without <code>course-v1:</code>/<code>block-v1:</code> patterns (non-edX tools, custom providers, the bare tool-config URL) are not rewritten — by design.</p>
+
+<h3><strong>Wrong-File Pairings</strong></h3>
+<p>The two most common user errors are exporting the new Canvas course instead of the old one, and exporting the old edX course instead of the new one. Symptoms: "same course version" warnings, everything MISSING, or a no-op output where old and new URLs are identical. The web UI's confirmation step surfaces the detected course IDs before processing precisely to catch this; when triaging, always check the audit CSV's old/new course IDs first.</p>
+
+<h3><strong>Gunicorn Timeout</strong></h3>
+<p>300-second timeout in Procfile/render.yaml. Very large courses may approach it; processing scales with XML file count in both exports.</p>
+
+<h3><strong>Logging</strong></h3>
+<p>INFO-level structured logs per pipeline phase; warnings for individual file failures. Check the PythonAnywhere error log or server console.</p>
+
+<h2 id="h_I10RESTART"><strong>How to Restart / Redeploy</strong></h2>
+
+<h3><strong>PythonAnywhere</strong></h3>
+<ol>
+<li>Log in to <a href="https://www.pythonanywhere.com" target="_blank" rel="noopener noreferrer">PythonAnywhere</a>.</li>
+<li>Web tab → "Reload" next to the app.</li>
+<li>Verify <code>/health</code> returns <code>{"status": "healthy"}</code>.</li>
+</ol>
+
+<h3><strong>Deploying Updates</strong></h3>
+<ol>
+<li>Upload updated code (Files tab or <code>git pull</code>).</li>
+<li>If dependencies changed: <code>pip install -r requirements.txt</code> in a console.</li>
+<li>Reload from the Web tab.</li>
+</ol>
+
+<h3><strong>Local Development</strong></h3>
+<pre class="wysiwyg-code-block"><code>pip install -r requirements.txt
+python app.py</code></pre>
+<p>Flask dev server on <code>http://localhost:5000</code>.</p>
+
+<h2 id="h_I11REPO"><strong>Code Repository and Contact</strong></h2>
+
+<p>Repository: <a href="https://github.com/kalebabebe/mitx-canvas-lti-link-updater" target="_blank" rel="noopener noreferrer">https://github.com/kalebabebe/mitx-canvas-lti-link-updater</a> (branch: <code>main</code>). The repository README is internal-facing; do not link it from user-facing articles.</p>
+
+<p>Questions, issues, feature requests: <a href="mailto:mitx-support@mit.edu">mitx-support@mit.edu</a>.</p>

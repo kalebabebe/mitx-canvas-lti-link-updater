@@ -198,8 +198,12 @@ class OLXParser:
         for vert_id, vert_data in vertical_map.items():
             vertical_children[vert_id] = vert_data.get('children', [])
 
-        # Now walk every component type directory
+        # Now walk every component type directory, PLUS the hierarchy levels.
+        # Canvas/MITx LTI links most commonly point to sequentials
+        # (type@sequential), so chapters/sequentials/verticals must be part
+        # of the block inventory for matching to work.
         component_types = self._find_component_types()
+        component_types |= {'chapter', 'sequential', 'vertical'}
 
         for block_type in component_types:
             type_dir = self.course_root / block_type
@@ -207,6 +211,9 @@ class OLXParser:
                 continue
 
             for xml_file in type_dir.glob('*.xml'):
+                # Skip macOS AppleDouble metadata files (._foo.xml)
+                if xml_file.name.startswith('._'):
+                    continue
                 block_id = xml_file.stem
                 display_name = ''
 
@@ -248,6 +255,8 @@ class OLXParser:
             return items
 
         for xml_file in level_dir.glob('*.xml'):
+            if xml_file.name.startswith('._'):
+                continue
             url_name = xml_file.stem
             display_name = ''
             children = []
@@ -287,12 +296,13 @@ class OLXParser:
         # Also discover any directories that contain XML files
         found_types = set()
         skip_dirs = {'course', 'chapter', 'sequential', 'vertical',
-                     'policies', 'static', 'tabs', 'drafts', 'about'}
+                     'policies', 'static', 'tabs', 'drafts', 'about',
+                     '__MACOSX', 'info', 'assets'}
 
         for item in self.course_root.iterdir():
-            if item.is_dir() and item.name not in skip_dirs:
+            if item.is_dir() and item.name not in skip_dirs and not item.name.startswith('.'):
                 # Check if it contains XML files (component definitions)
-                if any(item.glob('*.xml')):
+                if any(f for f in item.glob('*.xml') if not f.name.startswith('._')):
                     found_types.add(item.name)
 
         return found_types | {t for t in known_types if (self.course_root / t).is_dir()}

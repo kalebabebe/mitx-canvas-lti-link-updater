@@ -344,40 +344,42 @@
             <form id="upload-form" class="card" enctype="multipart/form-data">
                 <h2>Upload Course Files</h2>
 
-                <div class="upload-grid">
-                    <!-- Canvas IMSCC -->
-                    <div class="upload-box" id="canvas-drop">
-                        <label for="canvas-file">Old Canvas Export</label>
-                        <p class="hint">
-                            Export from the <strong>previous semester's</strong> Canvas course.<br>
-                            Settings &rarr; Export Course Content &rarr; Course (.imscc)
-                        </p>
-                        <input type="file" id="canvas-file" name="canvas_file"
-                               accept=".imscc" required>
-                        <div class="file-name" id="canvas-file-name"></div>
-                        <p class="hint">Accepted: .imscc &middot; Max {{ max_file_size_mb }}MB</p>
-                    </div>
+                <p class="hint" style="margin-bottom:1rem">
+                    You need two files: the <strong>old Canvas course</strong> export
+                    (Settings &rarr; Export Course Content &rarr; Course) and the
+                    <strong>new edX course</strong> export (Studio &rarr; Tools &rarr; Export).
+                    Drop them below <strong>in any order</strong> &mdash; the tool
+                    identifies each file automatically, whatever it's named.
+                </p>
 
-                    <!-- edX OLX -->
-                    <div class="upload-box" id="edx-drop">
-                        <label for="edx-file">New edX Course Export</label>
-                        <p class="hint">
-                            Export from the <strong>new semester's</strong> edX course (cloned).<br>
-                            Studio &rarr; Tools &rarr; Export &rarr; Download (.tar.gz)
-                        </p>
-                        <input type="file" id="edx-file" name="edx_file"
-                               accept=".tar.gz,.gz" required>
-                        <div class="file-name" id="edx-file-name"></div>
-                        <p class="hint">Accepted: .tar.gz &middot; Max {{ max_file_size_mb }}MB</p>
-                    </div>
+                <div class="upload-box" id="drop-zone" style="padding:2.5rem 1.5rem; cursor:pointer">
+                    <label style="cursor:pointer">Drag both files here, or click to browse</label>
+                    <input type="file" id="file-input" multiple style="display:none">
+                    <div class="file-name" id="file-list"></div>
+                    <p class="hint">Max {{ max_file_size_mb }}MB per file</p>
                 </div>
 
                 <div class="submit-row">
-                    <button type="submit" class="btn btn-primary" id="process-btn">
-                        Process Files
+                    <button type="submit" class="btn btn-primary" id="process-btn" disabled>
+                        Check Files
                     </button>
                 </div>
             </form>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- CONFIRMATION SECTION                                          -->
+        <!-- ============================================================ -->
+        <section id="confirm-section" style="display:none">
+            <div class="card">
+                <h2>Confirm Before Updating</h2>
+                <div id="confirm-summary" style="font-size:0.95rem; line-height:1.8"></div>
+                <div id="confirm-warnings"></div>
+                <div class="btn-row">
+                    <button class="btn btn-success" id="confirm-btn">Looks right &mdash; update the links</button>
+                    <button class="btn btn-outline" onclick="resetForm()">Cancel &mdash; wrong files</button>
+                </div>
+            </div>
         </section>
 
         <!-- ============================================================ -->
@@ -483,74 +485,126 @@
     <script>
         // ---- DOM refs ----
         const uploadSection    = document.getElementById('upload-section');
+        const confirmSection   = document.getElementById('confirm-section');
         const processingSection= document.getElementById('processing-section');
         const errorSection     = document.getElementById('error-section');
         const resultsSection   = document.getElementById('results-section');
         const form             = document.getElementById('upload-form');
         const progressText     = document.getElementById('progress-text');
+        const dropZone         = document.getElementById('drop-zone');
+        const fileInput        = document.getElementById('file-input');
+        const processBtn       = document.getElementById('process-btn');
 
-        // ---- File name display ----
-        document.getElementById('canvas-file').addEventListener('change', function() {
-            const name = this.files[0]?.name || '';
-            document.getElementById('canvas-file-name').textContent = name;
-            this.closest('.upload-box').classList.toggle('has-file', !!name);
-        });
-        document.getElementById('edx-file').addEventListener('change', function() {
-            const name = this.files[0]?.name || '';
-            document.getElementById('edx-file-name').textContent = name;
-            this.closest('.upload-box').classList.toggle('has-file', !!name);
-        });
+        // ---- Single drop zone: collect up to 2 files, any order ----
+        let selectedFiles = [];
 
-        // ---- Form submit ----
+        function setFiles(fileList) {
+            // Add new files, keep only the 2 most recent
+            for (const f of fileList) selectedFiles.push(f);
+            selectedFiles = selectedFiles.slice(-2);
+            renderFileList();
+        }
+
+        function renderFileList() {
+            const el = document.getElementById('file-list');
+            el.innerHTML = selectedFiles.map(f =>
+                `${esc(f.name)} (${(f.size / 1024 / 1024).toFixed(1)} MB)`
+            ).join('<br>');
+            dropZone.classList.toggle('has-file', selectedFiles.length > 0);
+            processBtn.disabled = selectedFiles.length !== 2;
+            processBtn.textContent = selectedFiles.length === 2
+                ? 'Check Files' : `Check Files (${selectedFiles.length}/2 selected)`;
+        }
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', function() { setFiles(this.files); this.value = ''; });
+        dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('has-file'); });
+        dropZone.addEventListener('dragleave', () => renderFileList());
+        dropZone.addEventListener('drop', e => { e.preventDefault(); setFiles(e.dataTransfer.files); });
+
+        function buildFormData() {
+            const fd = new FormData();
+            selectedFiles.forEach(f => fd.append('files', f));
+            return fd;
+        }
+
+        function validateSizes() {
+            const maxBytes = {{ max_file_size_mb }} * 1024 * 1024;
+            for (const f of selectedFiles) {
+                if (f.size > maxBytes) {
+                    alert(`"${f.name}" exceeds the {{ max_file_size_mb }}MB limit.`);
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // ---- Step 1: Check files (preview) ----
         form.addEventListener('submit', async function(e) {
             e.preventDefault();
-
-            // Client-side validation
-            const canvasFile = document.getElementById('canvas-file').files[0];
-            const edxFile    = document.getElementById('edx-file').files[0];
-
-            if (!canvasFile) { alert('Please select a Canvas export (.imscc) file.'); return; }
-            if (!edxFile)    { alert('Please select an edX export (.tar.gz) file.'); return; }
-
-            if (!canvasFile.name.toLowerCase().endsWith('.imscc')) {
-                alert('Canvas file must be a .imscc file.'); return;
+            if (selectedFiles.length !== 2) {
+                alert('Please select both files: the old Canvas export and the new edX export.');
+                return;
             }
-            if (!edxFile.name.toLowerCase().endsWith('.tar.gz') && !edxFile.name.toLowerCase().endsWith('.gz')) {
-                alert('edX file must be a .tar.gz file.'); return;
-            }
+            if (!validateSizes()) return;
 
-            const maxBytes = {{ max_file_size_mb }} * 1024 * 1024;
-            if (canvasFile.size > maxBytes) {
-                alert('Canvas file exceeds the {{ max_file_size_mb }}MB limit.'); return;
-            }
-            if (edxFile.size > maxBytes) {
-                alert('edX file exceeds the {{ max_file_size_mb }}MB limit.'); return;
-            }
-
-            // Show processing
             showSection('processing');
-            progressText.textContent = 'Uploading files…';
-
-            const formData = new FormData(form);
+            progressText.textContent = 'Checking your files…';
 
             try {
-                progressText.textContent = 'Processing files… This may take 10–30 seconds for large courses.';
-
-                const resp = await fetch('/process', {
-                    method: 'POST',
-                    body: formData,
-                });
-
+                const resp = await fetch('/preview', { method: 'POST', body: buildFormData() });
                 const data = await resp.json();
-
                 if (!resp.ok || data.error) {
                     showError(data.error || 'An unknown error occurred.', data.details || []);
                     return;
                 }
+                renderConfirmation(data.preview);
+                showSection('confirm');
+            } catch (err) {
+                showError('Network error or server timeout.', [err.message]);
+            }
+        });
 
+        // ---- Confirmation rendering ----
+        function renderConfirmation(p) {
+            const summary = document.getElementById('confirm-summary');
+            summary.innerHTML = `
+                Found <strong>${p.lti_link_count} LTI link(s)</strong> in
+                &ldquo;<strong>${esc(p.canvas_course_title)}</strong>&rdquo;
+                currently pointing at:<br>
+                <span class="ci-value">${esc(p.old_course_id || 'unknown course')}</span><br><br>
+                They will be updated to point at
+                &ldquo;<strong>${esc(p.edx_course_title || 'untitled course')}</strong>&rdquo;:<br>
+                <span class="ci-value">${esc(p.new_course_id)}</span><br><br>
+                <strong>${p.will_update}</strong> link(s) will be updated;
+                <strong>${p.will_skip}</strong> will be left unchanged
+                (details after processing).
+            `;
+            const wc = document.getElementById('confirm-warnings');
+            wc.innerHTML = '';
+            (p.warnings || []).forEach(w => {
+                const div = document.createElement('div');
+                div.className = 'warning-banner';
+                div.style.marginTop = '1rem';
+                div.innerHTML = `<strong>Check this before continuing</strong>${esc(w)}`;
+                wc.appendChild(div);
+            });
+        }
+
+        // ---- Step 2: Confirm → process ----
+        document.getElementById('confirm-btn').addEventListener('click', async function() {
+            showSection('processing');
+            progressText.textContent = 'Updating links… This may take 10–30 seconds for large courses.';
+
+            try {
+                const resp = await fetch('/process', { method: 'POST', body: buildFormData() });
+                const data = await resp.json();
+                if (!resp.ok || data.error) {
+                    showError(data.error || 'An unknown error occurred.', data.details || []);
+                    return;
+                }
                 renderResults(data);
                 showSection('results');
-
             } catch (err) {
                 showError('Network error or server timeout.', [
                     err.message,
@@ -563,6 +617,7 @@
         // ---- Section visibility ----
         function showSection(name) {
             uploadSection.style.display     = name === 'upload'     ? '' : 'none';
+            confirmSection.style.display    = name === 'confirm'    ? '' : 'none';
             processingSection.style.display = name === 'processing' ? '' : 'none';
             errorSection.style.display      = name === 'error'      ? '' : 'none';
             resultsSection.style.display    = name === 'results'    ? '' : 'none';
@@ -582,9 +637,8 @@
 
         function resetForm() {
             form.reset();
-            document.getElementById('canvas-file-name').textContent = '';
-            document.getElementById('edx-file-name').textContent = '';
-            document.querySelectorAll('.upload-box').forEach(b => b.classList.remove('has-file'));
+            selectedFiles = [];
+            renderFileList();
             showSection('upload');
         }
 

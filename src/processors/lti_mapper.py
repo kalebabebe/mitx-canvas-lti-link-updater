@@ -97,7 +97,12 @@ class LTIMapper:
                 result.missing_count += 1
 
         # Phase 2: Find NEW_ONLY blocks (in new course but not referenced by Canvas)
+        # Only report linkable block types (Canvas LTI links launch sequentials);
+        # listing every problem/video/html block would bury the useful rows.
+        linkable_types = {'sequential', 'vertical'}
         for block_id, block in self.olx.blocks.items():
+            if block.block_type not in linkable_types:
+                continue
             if block_id not in referenced_block_ids:
                 location = self._build_location(block)
                 result.mapped_links.append(MappedLink(
@@ -112,7 +117,25 @@ class LTIMapper:
                 ))
                 result.new_only_count += 1
 
-        # Warnings
+        # Warnings — wrong-file-pairing checks first, since they explain
+        # everything else on the report.
+        if result.old_course_id and result.old_course_id == result.new_course_id:
+            result.warnings.append(
+                'The Canvas links already point to this exact edX course run, so '
+                'the output will be identical to the input. If you meant to move '
+                'links to a NEW run, check that you exported the OLD Canvas course '
+                'and the NEW edX course.'
+            )
+
+        link_orgs = {l.edx_org for l in self.lti_links if l.edx_org}
+        if link_orgs and self.olx.org and self.olx.org not in link_orgs:
+            result.warnings.append(
+                f'None of the Canvas LTI links reference the organization '
+                f'"{self.olx.org}" found in the edX export (links reference: '
+                f'{", ".join(sorted(link_orgs))}). This usually means the wrong '
+                f'edX course was exported.'
+            )
+
         if result.missing_count > 0:
             result.warnings.append(
                 f'{result.missing_count} LTI link(s) reference blocks not found in the '

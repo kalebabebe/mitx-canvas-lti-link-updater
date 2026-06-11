@@ -16,6 +16,7 @@ from pathlib import Path
 from flask import Flask, render_template, request, send_file, jsonify, session
 from werkzeug.utils import secure_filename
 
+from src.file_detect import identify
 from src.parsers.canvas_lti_parser import CanvasLTIParser
 from src.parsers.olx_parser import OLXParser
 from src.processors.lti_mapper import LTIMapper
@@ -60,17 +61,64 @@ def cleanup_tmp_folders():
             logger.warning(f'Could not clean {folder}: {e}')
 
 
-def validate_upload(file_field, allowed_extensions, label):
-    """Validate a single file upload."""
-    if file_field not in request.files:
-        return None, f'No {label} file uploaded.'
-    f = request.files[file_field]
-    if f.filename == '':
-        return None, f'No {label} file selected.'
-    if not any(f.filename.lower().endswith(ext) for ext in allowed_extensions):
-        exts = ', '.join(allowed_extensions)
-        return None, f'{label} must be one of: {exts}'
-    return f, None
+def resolve_uploads():
+    """
+    Save uploaded files and identify which is the Canvas export and which
+    is the edX export — by CONTENT, not by file name or field name.
+
+    Accepts either:
+      - 'files': two files in any order (new single-drop-zone UI), or
+      - 'canvas_file' + 'edx_file': legacy named fields.
+
+    Returns (info, error_response) where info is
+    (canvas_path, edx_path, canvas_filename). Exactly one is None.
+    """
+    cleanup_tmp_folders()
+
+    uploads = request.files.getlist('files')
+    if not uploads:
+        uploads = []
+        for field in ('canvas_file', 'edx_file'):
+            if field in request.files and request.files[field].filename:
+                uploads.append(request.files[field])
+
+    uploads = [f for f in uploads if f and f.filename]
+    if len(uploads) != 2:
+        return None, (jsonify({
+            'error': 'Please upload exactly two files: a Canvas export and an edX export.',
+            'details': [f'Received {len(uploads)} file(s).'],
+        }), 400)
+
+    saved = []
+    for i, f in enumerate(uploads):
+        name = secure_filename(f.filename) or f'upload_{i}'
+        path = os.path.join(app.config['UPLOAD_FOLDER'], f'{i}_{name}')
+        f.save(path)
+        saved.append((f.filename, path))
+
+    kinds = {}
+    for original_name, path in saved:
+        kind = identify(path)
+        kinds.setdefault(kind, []).append((original_name, path))
+
+    if 'canvas' not in kinds or 'edx' not in kinds:
+        details = []
+        for kind, label in [('canvas', 'Canvas export (a ZIP containing imsmanifest.xml)'),
+                            ('edx', 'edX export (a .tar.gz containing course.xml)')]:
+            names = [n for n, _ in kinds.get(kind, [])]
+            details.append(f'{label}: {", ".join(names) if names else "NOT FOUND"}')
+        for n, _ in kinds.get('unknown', []):
+            details.append(f'Unrecognized file: {n}')
+        return None, (jsonify({
+            'error': 'Could not identify one Canvas export and one edX export '
+                     'among the uploaded files.',
+            'details': details,
+        }), 400)
+
+    canvas_name, canvas_path = kinds['canvas'][0]
+    edx_name, edx_path = kinds['edx'][0]
+    logger.info(f'Identified uploads: canvas={canvas_name}, edx={edx_name}')
+    return (canvas_path, edx_path, secure_filename(canvas_name) or 'course.imscc'), None
 
 
 # ---------------------------------------------------------------------------
@@ -83,14 +131,82 @@ def index():
     return render_template('index.html', max_file_size_mb=max_mb)
 
 
+@app.route('/preview', methods=['POST'])
+def preview():
+    """
+    Parse both uploads and report what WOULD happen, without generating
+    anything. The UI shows this as a confirmation step so wrong-file
+    mistakes are caught before processing.
+    """
+    canvas_parser = None
+    olx_parser = None
+
+    try:
+        info, err = resolve_uploads()
+        if err:
+            return err
+
+        canvas_path, edx_path, canvas_filename = info
+
+        canvas_parser = CanvasLTIParser(canvas_path)
+        canvas_result = canvas_parser.parse()
+        if canvas_result.errors:
+            return jsonify({'error': 'Failed to parse Canvas export.',
+                            'details': canvas_result.errors}), 400
+        if not canvas_result.lti_links:
+            return jsonify({
+                'error': 'No LTI links found in the Canvas export.',
+                'details': ['Make sure you exported the Canvas course that '
+                            'contains the edX LTI links (usually last semester\'s course).'],
+            }), 400
+
+        olx_parser = OLXParser(edx_path)
+        olx_result = olx_parser.parse()
+        if olx_result.errors:
+            return jsonify({'error': 'Failed to parse edX export.',
+                            'details': olx_result.errors}), 400
+        if not olx_result.blocks:
+            return jsonify({'error': 'No blocks found in the edX export.',
+                            'details': ['The OLX export appears to be empty.']}), 400
+
+        # Dry-run the mapping for accurate counts and pairing warnings
+        mapping = LTIMapper(canvas_result.lti_links, olx_result).map()
+
+        return jsonify({
+            'success': True,
+            'preview': {
+                'canvas_course_title': canvas_result.course_title,
+                'canvas_filename': canvas_filename,
+                'lti_link_count': len(canvas_result.lti_links),
+                'old_course_id': mapping.old_course_id,
+                'new_course_id': mapping.new_course_id,
+                'edx_course_title': olx_result.course_title,
+                'will_update': mapping.matched_count,
+                'will_skip': mapping.missing_count,
+                'warnings': mapping.warnings,
+            },
+        })
+
+    except Exception as e:
+        logger.error(f'Preview failed: {traceback.format_exc()}')
+        return jsonify({'error': 'Preview failed.', 'details': [str(e)]}), 500
+
+    finally:
+        for p in (canvas_parser, olx_parser):
+            if p:
+                try:
+                    p.cleanup()
+                except Exception:
+                    pass
+
+
 @app.route('/process', methods=['POST'])
 def process():
     """
     Handle file uploads and run the full LTI link mapping pipeline.
 
-    Expects two files:
-        - canvas_file: .imscc Canvas course export
-        - edx_file:    .tar.gz edX OLX course export
+    Accepts two files in any order via the 'files' field (identified by
+    content), or legacy 'canvas_file'/'edx_file' named fields.
     """
     canvas_parser = None
     olx_parser = None
@@ -98,34 +214,14 @@ def process():
 
     try:
         # ------------------------------------------------------------------
-        # Validate uploads
+        # Validate, save, and identify uploads (by content)
         # ------------------------------------------------------------------
-        step = 'validating uploads'
-        canvas_file, err = validate_upload('canvas_file', ['.imscc'], 'Canvas export')
+        step = 'identifying uploaded files'
+        info, err = resolve_uploads()
         if err:
-            return jsonify({'error': err}), 400
+            return err
 
-        edx_file, err = validate_upload('edx_file', ['.tar.gz', '.gz'], 'edX export')
-        if err:
-            return jsonify({'error': err}), 400
-
-        # ------------------------------------------------------------------
-        # Clean up and save files
-        # ------------------------------------------------------------------
-        step = 'saving uploaded files'
-        cleanup_tmp_folders()
-
-        canvas_filename = secure_filename(canvas_file.filename)
-        edx_filename = secure_filename(edx_file.filename)
-
-        canvas_path = os.path.join(app.config['UPLOAD_FOLDER'], canvas_filename)
-        edx_path = os.path.join(app.config['UPLOAD_FOLDER'], edx_filename)
-
-        canvas_file.save(canvas_path)
-        edx_file.save(edx_path)
-
-        logger.info(f'Received files: {canvas_filename} ({os.path.getsize(canvas_path)} bytes), '
-                     f'{edx_filename} ({os.path.getsize(edx_path)} bytes)')
+        canvas_path, edx_path, canvas_filename = info
 
         # ------------------------------------------------------------------
         # Phase 1: Parse Canvas IMSCC for LTI links
@@ -298,15 +394,29 @@ def process():
 
 @app.route('/download/<path:filename>')
 def download(filename):
-    """Serve a generated file for download."""
-    file_path = os.path.join(app.config['OUTPUT_FOLDER'], filename)
-    if not os.path.exists(file_path):
+    """Serve a generated file for download.
+
+    Uses secure_filename and confirms the resolved path stays inside the
+    output folder to prevent path-traversal (e.g. /download/../../etc/passwd).
+    """
+    safe_name = secure_filename(filename)
+    if not safe_name:
+        return jsonify({'error': 'Invalid file name.'}), 400
+
+    output_root = os.path.realpath(app.config['OUTPUT_FOLDER'])
+    file_path = os.path.realpath(os.path.join(output_root, safe_name))
+
+    # Ensure the resolved path is within the output folder
+    if os.path.commonpath([output_root, file_path]) != output_root:
+        return jsonify({'error': 'Invalid file path.'}), 400
+
+    if not os.path.isfile(file_path):
         return jsonify({'error': 'File not found. It may have expired — please process again.'}), 404
 
     return send_file(
         file_path,
         as_attachment=True,
-        download_name=filename,
+        download_name=safe_name,
     )
 
 
