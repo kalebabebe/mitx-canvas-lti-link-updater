@@ -9,18 +9,34 @@ Year-over-year workflow it supports:
 3. Run this tool (web or CLI).
 4. Import the `_updated.imscc` into the new semester's Canvas course.
 
-## Two ways to run it
+## Three ways to run it
 
-### Web app (hosted)
+There are three front ends over one shared pipeline. Pick by audience and course size:
+
+| | Best for | Course size | Hosting |
+|---|---|---|---|
+| **A. Browser app** (`docs/`) | Most users — nothing to install | Any, incl. 600MB+ (streams) | Free, GitHub Pages |
+| **B. CLI** (`cli.py`) | Power users comfortable with a terminal; offline; batch | Any | None (runs locally) |
+| **C. Hosted Flask** (`app.py`) | Optional fallback; central URL | Limited by host upload/disk | Paid tier recommended |
+
+The browser app and CLI are the primary paths; the hosted Flask app is kept as an option.
+
+### A. Browser app (GitHub Pages) — recommended for most users
+
+Static site in `docs/`. Runs entirely client-side: files never leave the user's computer, no upload, no server. Uses a **streaming** pipeline (zip.js + native gzip streams) that keeps memory flat regardless of course size, so 600MB+ courses work where the naive in-browser approach would exhaust tab memory. In Chrome/Edge it streams the rebuilt `.imscc` straight to disk via the File System Access API; other browsers fall back to an in-memory download.
+
+To host: repo Settings → Pages → Source = `main` branch, `/docs` folder. To try locally, serve the folder (`python -m http.server` from `docs/`) and open it — opening `index.html` via `file://` won't work because of module/CORS rules.
+
+### C. Hosted Flask web app
 
 ```
 pip install -r requirements.txt
 python app.py          # http://localhost:5000
 ```
 
-Upload the `.imscc` and `.tar.gz`, click Process, download the updated export and audit CSV. Deployment configs for Render (`render.yaml`) and PythonAnywhere are included; see the docs HTML for details.
+Upload the `.imscc` and `.tar.gz`, confirm, download the updated export and audit CSV. Deployment configs for Render (`render.yaml`) and PythonAnywhere are included. Note free tiers cap uploads (~70MB practical on PythonAnywhere); large courses need a paid tier or the browser app / CLI.
 
-### Local CLI (folder-based)
+### B. Local CLI (folder-based)
 
 Drop the two export files into any folder — **file names don't matter**, the CLI detects each file by content (a ZIP containing `imsmanifest.xml` is the Canvas export; a gzipped tar containing `course.xml` is the edX export):
 
@@ -56,24 +72,36 @@ Links with no `course-v1:`/`block-v1:` identifier (e.g. the bare LTI tool config
 ## Repo layout
 
 ```
-app.py                          Flask web app (upload → process → download)
-cli.py                          Local folder-based CLI
-src/parsers/canvas_lti_parser.py  Finds LTI links in the .imscc
-src/parsers/olx_parser.py         Builds block inventory from the edX .tar.gz
-src/processors/lti_mapper.py      Matches links to blocks, builds new URLs
-src/generators/imscc_updater.py   Rewrites URLs, repackages the .imscc
-src/generators/audit_csv.py       Audit CSV
-templates/index.html              Web UI
+docs/                             A. Browser app (GitHub Pages source)
+  index.html                        Streaming UI (converter visual style)
+  style.css                         Styling
+  lti-core.js                       Shared pure logic (parse/map/CSV), JS port
+  stream-core.js                    Streaming readers/writers (zip.js + gzip)
+  user-guide.html                   In-app user guide
+
+cli.py                            B. Local folder-based CLI
+app.py                            C. Flask web app (upload → process → download)
+src/file_detect.py                Content-based file identification (shared)
+src/parsers/canvas_lti_parser.py  Finds LTI links in the .imscc (Python)
+src/parsers/olx_parser.py         Builds block inventory from the .tar.gz (Python)
+src/processors/lti_mapper.py      Matches links to blocks, builds new URLs (Python)
+src/generators/imscc_updater.py   Rewrites URLs, repackages the .imscc (Python)
+src/generators/audit_csv.py       Audit CSV (Python)
+templates/index.html              Flask web UI
 tests/                            Sample export files
 ```
+
+The Python pipeline (`src/`, used by `app.py` and `cli.py`) and the JS pipeline (`docs/lti-core.js` + `docs/stream-core.js`) implement the same logic. They are verified to produce **byte-identical** output `.imscc` files against the test fixtures.
 
 ## Notes for maintainers
 
 - The OLX block inventory includes chapters, sequentials, and verticals — MITx LTI links most commonly target sequentials and verticals, not leaf components.
 - macOS metadata files (`._*`, `__MACOSX`) inside the tar.gz are ignored.
 - The updated `.imscc` is byte-identical to the input except for the rewritten LTI URLs; empty directories are preserved.
-- `/download/` sanitizes filenames and confines paths to the output folder (path-traversal protection).
-- Documentation is split by audience: `mitx-canvas-lti-link-updater-user-guide.html` (course teams, plain language — publish this one) and `mitx-canvas-lti-link-updater-internal-docs.html` (ETs/support: CLI, architecture, hosting, failure modes). This README and the internal doc are internal-facing; don't link them from user-facing articles.
+- `/download/` (Flask) sanitizes filenames and confines paths to the output folder (path-traversal protection).
+- **Memory:** the browser app streams. Measured peak RSS ~330MB for ~530MB of input (flat regardless of media size), vs ~930MB for 288MB input with a non-streaming load — which is why `docs/` uses a streaming pipeline.
+- **Two implementations:** any change to matching/rewriting logic must be made in both Python (`src/`) and JS (`docs/lti-core.js`, `docs/stream-core.js`) and re-verified for parity.
+- Documentation is split by audience: `mitx-canvas-lti-link-updater-user-guide.html` (course teams, plain language — publish this one) and `mitx-canvas-lti-link-updater-internal-docs.html` (ETs/support: CLI, architecture, hosting, deployment, failure modes). This README and the internal doc are internal-facing; don't link them from user-facing articles.
 
 ## Contact
 

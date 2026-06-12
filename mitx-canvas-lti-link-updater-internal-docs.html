@@ -22,11 +22,37 @@
 
 <p>The Canvas LTI Link Updater rewrites LTI (Learning Tools Interoperability) links in a Canvas course export so they point to a new edX course run. When an edX course is re-run or copied in Studio, block IDs are preserved but the course identifier (<code>course-v1:ORG+COURSE+RUN</code>) changes, so every Canvas LTI link to that course becomes stale. The tool parses both exports, matches links to blocks by block ID, rewrites matched URLs, and produces an updated <code>.imscc</code> plus an audit CSV.</p>
 
-<p>There are two front ends over the same pipeline:</p>
-<ul>
-<li><strong>Web app</strong> (Flask) — what course teams use; see the user guide.</li>
-<li><strong>CLI</strong> (<code>cli.py</code>) — folder-based local runs for ETs/support, large files, or when the hosted tool is down. Results are identical because both call the same parser/mapper/updater modules.</li>
-</ul>
+<p>There are <strong>three</strong> front ends over the same logic. Two implementations
+exist: a Python pipeline (<code>src/</code>, used by the CLI and Flask app) and a
+JavaScript port (<code>docs/lti-core.js</code> + <code>docs/stream-core.js</code>, used by
+the browser app). They are verified to produce byte-identical output.</p>
+
+<table>
+<thead>
+<tr><th>Option</th><th>Audience</th><th>Course size</th><th>Hosting / cost</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>A. Browser app</strong> (<code>docs/</code>)</td><td>Most users — nothing to install, files stay private</td><td>Any, incl. 600MB+ (streaming)</td><td>Free, GitHub Pages</td></tr>
+<tr><td><strong>B. CLI</strong> (<code>cli.py</code>)</td><td>Power users on a terminal; offline; batch</td><td>Any</td><td>None (runs locally)</td></tr>
+<tr><td><strong>C. Hosted Flask</strong> (<code>app.py</code>)</td><td>Optional fallback with a central URL</td><td>Limited by host upload/disk</td><td>Paid tier recommended</td></tr>
+</tbody>
+</table>
+
+<p>The browser app (A) is the primary path for course teams; the CLI (B) is for
+power users and the largest courses; the hosted Flask app (C) is kept as an option
+and would need a paid host to handle large uploads.</p>
+
+<h3><strong>Why the browser app streams</strong></h3>
+<p>Processing a course entirely in a browser tab means everything is in memory. A
+naive load (loading the whole archive at once) holds the whole input zip plus the
+whole rebuilt output: measured <strong>~930MB peak RSS for a 288MB input</strong> (~3&times;),
+which scales to ~2GB for a 600MB course and crashes tabs. The production app in
+<code>docs/</code> instead <strong>streams</strong>: it decompresses the edX <code>.tar.gz</code> as a
+stream and keeps only the small hierarchy XML (never the media), reads the Canvas
+<code>.imscc</code> with random access (touching only XML, not media), and rewrites by
+stream-copying every entry to the output. Measured <strong>~330MB peak RSS for ~530MB
+of input, flat regardless of media size</strong>. In Chrome/Edge the output streams to
+disk via the File System Access API; other browsers fall back to an in-memory Blob.</p>
 
 <h2 id="h_I02CLI"><strong>Local CLI Usage</strong></h2>
 
@@ -138,7 +164,20 @@
 
 <h2 id="h_I06HOSTING"><strong>Hosting and Deployment</strong></h2>
 
-<p>Currently hosted on <strong>PythonAnywhere</strong>. <code>render.yaml</code> contains a Render configuration for future migration.</p>
+<h3><strong>A. Browser app on GitHub Pages (primary)</strong></h3>
+<p>The <code>docs/</code> folder is a static site. To publish: repository
+<strong>Settings &rarr; Pages &rarr; Source = <code>main</code> branch, <code>/docs</code> folder</strong>.
+GitHub serves it at <code>https://&lt;org-or-user&gt;.github.io/&lt;repo&gt;/</code>. No build step, no
+server, no cost. It loads zip.js from a CDN (jsDelivr, pinned version) and uses the
+browser's native gzip decompression; everything else is local.</p>
+<p>To test changes before pushing, serve the folder locally
+(<code>cd docs &amp;&amp; python -m http.server</code>) and open the printed URL — opening
+<code>index.html</code> directly via <code>file://</code> fails because browsers block module/CDN
+loading from the filesystem. There is no separate "deploy" step beyond pushing to
+<code>main</code>; Pages republishes automatically.</p>
+
+<h3><strong>C. Hosted Flask app</strong></h3>
+<p>Optionally hosted on <strong>PythonAnywhere</strong>. <code>render.yaml</code> contains a Render configuration for migration. Because it accepts uploads, large courses require a paid tier with raised upload limits and timeouts; otherwise direct users to the browser app or CLI.</p>
 
 <h3><strong>PythonAnywhere</strong></h3>
 <ul>

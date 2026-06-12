@@ -1,1 +1,14 @@
+# OS
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Node (only used for local testing of the JS pipeline)
+node_modules/
+
+# Local scratch / generated outputs
+*_updated.imscc
+tests/lti_audit_report.csv
