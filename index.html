@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Update MITx (edX) LTI links in a Canvas course export to point at a new course run. Runs entirely in your browser — files never leave your computer.">
+    <title>MITx-Canvas LTI Link Updater</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%F0%9F%94%97%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="style.css">
+    <script src="vendor/zip-full.min.js"></script>
+    <script src="lti-core.js"></script>
+    <script src="stream-core.js"></script>
+</head>
+<body>
+<div class="container">
+    <h1>MITx-Canvas LTI Link Updater</h1>
+
+    <div class="instructions">
+        Drop in your <strong>old Canvas export</strong> (.imscc) and the
+        <strong>new MITx course export</strong> (.tar.gz), in any order. This tool
+        updates every MITx link to the new course and gives you an updated Canvas
+        file to import, plus a report.
+    </div>
+
+    <!-- UPLOAD -->
+    <section id="upload-section">
+        <div class="drop-zone" id="drop-zone" tabindex="0" role="button"
+             aria-label="Choose or drop your export files">
+            <div class="dz-title">Drag both files here, or click to browse</div>
+            <div class="dz-hint" id="dz-hint">Old Canvas export (.imscc) + new MITx export (.tar.gz)</div>
+            <input type="file" id="file-input" multiple style="display:none">
+            <div class="file-list" id="file-list"></div>
+        </div>
+
+        <details class="advanced" id="advanced">
+            <summary>Advanced: don&rsquo;t have the new MITx export?</summary>
+            <label class="chk">
+                <input type="checkbox" id="target-toggle">
+                Rewrite all links to a target course ID <strong>without verification</strong>
+            </label>
+            <input type="text" id="target-input" disabled
+                   placeholder="course-v1:MITx+course_name+run"
+                   aria-label="Target course ID"
+                   spellcheck="false" autocomplete="off">
+            <p class="dz-hint">
+                Only the Canvas export (.imscc) is needed. Use this <strong>only if the new
+                MITx course is an exact copy</strong> of the old one (a Studio re-run or
+                export/import copy — same block IDs). Links are not checked against the new
+                course, so spot-check a couple of links after importing into Canvas.
+            </p>
+        </details>
+
+        <button id="check-btn" disabled>Check Files</button>
+        <p class="privacy-note">Everything runs in your browser &mdash; your files never leave your computer.</p>
+    </section>
+
+    <!-- CONFIRM -->
+    <section id="confirm-section" style="display:none">
+        <div class="panel" id="confirm-summary"></div>
+        <div id="confirm-warnings"></div>
+        <div class="btn-row">
+            <button id="confirm-btn">Looks right &mdash; update the links</button>
+            <button class="secondary" onclick="resetAll()">Cancel</button>
+        </div>
+    </section>
+
+    <!-- PROCESSING -->
+    <section id="processing-section" style="display:none">
+        <div class="center">
+            <div class="spinner"></div>
+            <p id="progress-text">Working&hellip;</p>
+        </div>
+    </section>
+
+    <!-- ERROR -->
+    <section id="error-section" style="display:none">
+        <div class="error" id="error-text"></div>
+        <button class="secondary" id="error-retry" onclick="resetAll()">Try Again</button>
+    </section>
+
+    <!-- RESULTS -->
+    <section id="results-section" style="display:none">
+        <div class="stats">
+            <div class="stat total"><div class="num" id="s-total">0</div><div class="lbl">Links Found</div></div>
+            <div class="stat matched"><div class="num" id="s-matched">0</div><div class="lbl">Updated</div></div>
+            <div class="stat missing"><div class="num" id="s-missing">0</div><div class="lbl">Need Attention</div></div>
+            <div class="stat newonly"><div class="num" id="s-new">0</div><div class="lbl">Not Linked</div></div>
+        </div>
+        <div id="result-warnings"></div>
+        <div id="result-saved" class="panel" style="display:none"></div>
+        <div class="panel" id="next-step"></div>
+        <div class="btn-row">
+            <a class="button" id="dl-imscc" style="display:none">Download Updated .imscc</a>
+            <a class="button secondary" id="dl-csv">Download Report (CSV)</a>
+            <button class="secondary" onclick="resetAll()">Process Another</button>
+        </div>
+        <div class="filters" role="group" aria-label="Filter results by status">
+            <span class="filters-label">Show:</span>
+            <label><input type="checkbox" class="status-filter" value="MATCHED" checked> Updated</label>
+            <label><input type="checkbox" class="status-filter" value="MISSING" checked> Need attention</label>
+            <label><input type="checkbox" class="status-filter" value="NEW_ONLY" checked> Not linked</label>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Status</th><th>Title</th><th>Old URL</th><th>New URL</th><th>Type</th><th>Location</th><th>Notes</th></tr></thead>
+                <tbody id="results-tbody"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <div class="footer">
+        <a href="docs/user-guide.html">User guide</a> &middot;
+        Need help? <a href="mailto:mitx-support@mit.edu">mitx-support@mit.edu</a>
+    </div>
+</div>
+
+<script>
+    // ---- browser capability check ----
+    let unsupported = false;
+    (function () {
+        const missing = [];
+        if (typeof DecompressionStream === 'undefined') missing.push('DecompressionStream');
+        if (typeof TransformStream === 'undefined') missing.push('TransformStream');
+        if (typeof ReadableStream === 'undefined') missing.push('ReadableStream');
+        if (typeof zip === 'undefined') missing.push('zip.js');
+        if (missing.length) {
+            unsupported = true;
+            document.getElementById('error-text').textContent =
+                'Sorry — this browser can’t run the updater (it lacks: ' + missing.join(', ') + '). ' +
+                'Please use a current version of Chrome, Edge, or Firefox, or Safari 16.4 or newer.';
+            document.getElementById('error-retry').style.display = 'none';
+            for (const s of ['upload', 'confirm', 'processing', 'results'])
+                document.getElementById(s + '-section').style.display = 'none';
+            document.getElementById('error-section').style.display = '';
+        }
+    })();
+
+    if (!unsupported) zip.configure({ useWebWorkers: true });
+
+    const SECTIONS = ['upload', 'confirm', 'processing', 'error', 'results'];
+    function show(name) {
+        if (unsupported) return;
+        for (const s of SECTIONS) document.getElementById(s + '-section').style.display = s === name ? '' : 'none';
+    }
+    function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+    function fail(msg) { document.getElementById('error-text').textContent = msg; show('error'); }
+    function progress(t) { document.getElementById('progress-text').textContent = t; }
+
+    // ---- file selection & advanced (target) mode ----
+    let selected = [];
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const checkBtn = document.getElementById('check-btn');
+    const targetToggle = document.getElementById('target-toggle');
+    const targetInput = document.getElementById('target-input');
+
+    const TARGET_ID_RE = /^course-v1:[^+\s]+\+[^+\s]+\+[^+\s]+$/;
+    function targetMode() { return targetToggle.checked; }
+    function targetIdValid() { return TARGET_ID_RE.test(targetInput.value.trim()); }
+
+    function refreshControls() {
+        const need = targetMode() ? 1 : 2;
+        document.getElementById('dz-hint').textContent = targetMode()
+            ? 'Old Canvas export (.imscc) only'
+            : 'Old Canvas export (.imscc) + new MITx export (.tar.gz)';
+        document.querySelector('#drop-zone .dz-title').textContent = targetMode()
+            ? 'Drag your Canvas export here, or click to browse'
+            : 'Drag both files here, or click to browse';
+        targetInput.disabled = !targetMode();
+        targetInput.classList.toggle('invalid', targetMode() && targetInput.value.trim() !== '' && !targetIdValid());
+
+        const ready = targetMode() ? (selected.length >= 1 && targetIdValid()) : selected.length === 2;
+        checkBtn.disabled = !ready;
+        if (ready) {
+            checkBtn.textContent = 'Check Files';
+        } else if (targetMode()) {
+            checkBtn.textContent = selected.length < 1
+                ? 'Check Files (select your Canvas export)'
+                : 'Check Files (enter a valid course ID)';
+        } else {
+            checkBtn.textContent = `Check Files (${selected.length}/2 selected)`;
+        }
+    }
+
+    function setFiles(list) {
+        for (const f of list) selected.push(f);
+        selected = selected.slice(-2);
+        document.getElementById('file-list').innerHTML =
+            selected.map(f => `${esc(f.name)} (${(f.size / 1048576).toFixed(1)} MB)`).join('<br>');
+        refreshControls();
+    }
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+    });
+    fileInput.addEventListener('change', function () { setFiles(this.files); this.value = ''; });
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('active'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('active'));
+    dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('active'); setFiles(e.dataTransfer.files); });
+    targetToggle.addEventListener('change', refreshControls);
+    targetInput.addEventListener('input', refreshControls);
+
+    // ---- detection ----
+    async function isGzip(file) {
+        const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
+        return head[0] === 0x1f && head[1] === 0x8b;
+    }
+    async function canvasReaderIfAny(file) {
+        try {
+            const reader = new zip.ZipReader(new zip.BlobReader(file));
+            const entries = await reader.getEntries();
+            if (entries.some(e => e.filename.split('/').pop() === 'imsmanifest.xml')) return reader;
+            await reader.close();
+        } catch (e) { /* not a zip */ }
+        return null;
+    }
+
+    // ---- cached pipeline state ----
+    let canvasReader = null, canvasResult = null, olxResult = null, mapping = null, canvasFileName = '';
+    let blobUrl = null, csvUrl = null;
+
+    async function closeReader() {
+        if (canvasReader) { try { await canvasReader.close(); } catch (e) { /* ignore */ } }
+        canvasReader = null;
+    }
+    function revokeUrls() {
+        if (blobUrl) { URL.revokeObjectURL(blobUrl); blobUrl = null; }
+        if (csvUrl) { URL.revokeObjectURL(csvUrl); csvUrl = null; }
+    }
+
+    checkBtn.addEventListener('click', async () => {
+        show('processing'); progress('Reading your files…');
+        try {
+            await closeReader(); // release any reader from a previous attempt
+            olxResult = null; let edxFile = null;
+            for (const f of selected) {
+                const cr = await canvasReaderIfAny(f);
+                if (cr && !canvasReader) { canvasReader = cr; canvasFileName = f.name; }
+                else if (await isGzip(f) && !edxFile) { edxFile = f; }
+            }
+
+            if (targetMode()) {
+                // ---- unverified rewrite: Canvas export + target course ID ----
+                if (!canvasReader) {
+                    fail('Could not identify a Canvas export (.imscc) in your selection. ' +
+                         'Please check you selected the right file.');
+                    return;
+                }
+                progress('Finding MITx links in the Canvas course…');
+                canvasResult = await LTIStream.readCanvasLinks(canvasReader);
+                if (!canvasResult.ltiLinks.length) {
+                    fail('No MITx links found in the Canvas export. Make sure you exported the course that contains the MITx links (usually last semester’s course).');
+                    return;
+                }
+                mapping = LTICore.blindRewriteMapping(canvasResult.ltiLinks, targetInput.value.trim());
+
+                document.getElementById('confirm-summary').innerHTML = `
+                    Found <strong>${canvasResult.ltiLinks.length} MITx link(s)</strong> in
+                    &ldquo;<strong>${esc(canvasResult.courseTitle)}</strong>&rdquo; currently pointing at:<br>
+                    <span class="course-id">${esc(mapping.oldCourseId || 'unknown course')}</span><br><br>
+                    They will be rewritten &mdash; <strong>without verification</strong> &mdash; to point at:<br>
+                    <span class="course-id">${esc(mapping.newCourseId)}</span><br><br>
+                    <strong>${mapping.matched}</strong> link(s) will be updated;
+                    <strong>${mapping.missing}</strong> left unchanged.`;
+            } else {
+                // ---- verified rewrite: Canvas export + MITx export ----
+                if (!canvasReader || !edxFile) {
+                    fail('Could not identify one Canvas export (.imscc) and one MITx export (.tar.gz). ' +
+                         'Canvas: ' + (canvasReader ? 'found' : 'NOT FOUND') +
+                         ' · MITx: ' + (edxFile ? 'found' : 'NOT FOUND') +
+                         '. Please check you selected the right two files.');
+                    return;
+                }
+
+                progress('Scanning the new MITx course…');
+                olxResult = await LTIStream.scanOlxStream(edxFile.stream());
+                if (olxResult.errors.length) { fail('Could not read the MITx export: ' + olxResult.errors.join('; ')); return; }
+                if (!olxResult.blocks.size) { fail('No course content found in the MITx export. Re-export it from Studio and try again.'); return; }
+
+                progress('Finding MITx links in the Canvas course…');
+                canvasResult = await LTIStream.readCanvasLinks(canvasReader);
+                if (!canvasResult.ltiLinks.length) {
+                    fail('No MITx links found in the Canvas export. Make sure you exported the course that contains the MITx links (usually last semester’s course).');
+                    return;
+                }
+
+                mapping = LTICore.mapLinks(canvasResult.ltiLinks, olxResult);
+
+                document.getElementById('confirm-summary').innerHTML = `
+                    Found <strong>${canvasResult.ltiLinks.length} MITx link(s)</strong> in
+                    &ldquo;<strong>${esc(canvasResult.courseTitle)}</strong>&rdquo; currently pointing at:<br>
+                    <span class="course-id">${esc(mapping.oldCourseId || 'unknown course')}</span><br><br>
+                    They will be updated to point at
+                    &ldquo;<strong>${esc(olxResult.courseTitle || 'untitled course')}</strong>&rdquo;:<br>
+                    <span class="course-id">${esc(mapping.newCourseId)}</span><br><br>
+                    <strong>${mapping.matched}</strong> link(s) will be updated;
+                    <strong>${mapping.missing}</strong> left unchanged.`;
+            }
+
+            const cw = document.getElementById('confirm-warnings');
+            cw.innerHTML = '';
+            for (const w of mapping.warnings)
+                cw.innerHTML += `<div class="warning"><strong>Please check before continuing</strong>${esc(w)}</div>`;
+            show('confirm');
+        } catch (e) {
+            fail('Something went wrong reading the files: ' + e.message);
+        }
+    });
+
+    // ---- process (streaming rewrite) ----
+    document.getElementById('confirm-btn').addEventListener('click', async () => {
+        const outName = canvasFileName.replace(/\.imscc$/i, '').replace(/_updated$/, '') + '_updated.imscc';
+        let savedToDisk = false;
+        revokeUrls();
+
+        try {
+            // Prefer streaming straight to disk (handles very large courses with low memory)
+            let zw, fileHandle = null;
+            if (window.showSaveFilePicker) {
+                try {
+                    fileHandle = await window.showSaveFilePicker({
+                        suggestedName: outName,
+                        types: [{ description: 'Canvas course export', accept: { 'application/zip': ['.imscc'] } }],
+                    });
+                } catch (e) {
+                    if (e.name === 'AbortError') return; // user cancelled the save dialog
+                    fileHandle = null;
+                }
+            }
+
+            show('processing'); progress('Updating links and rebuilding the export…');
+            const onProgress = (done, total) =>
+                progress(`Updating links and rebuilding the export… ${done.toLocaleString()} of ${total.toLocaleString()} files`);
+
+            if (fileHandle) {
+                const writable = await fileHandle.createWritable();
+                zw = new zip.ZipWriter(writable);
+                await LTIStream.streamRewriteCanvas(canvasReader, zw, mapping, onProgress);
+                await zw.close(); // also closes & flushes the file to disk
+                savedToDisk = true;
+            } else {
+                // Fallback: build in memory (fine for moderate courses)
+                zw = new zip.ZipWriter(new zip.BlobWriter('application/zip'));
+                await LTIStream.streamRewriteCanvas(canvasReader, zw, mapping, onProgress);
+                const blob = await zw.close();
+                blobUrl = URL.createObjectURL(blob);
+            }
+
+            // Audit CSV (small, always a download)
+            const csv = LTICore.generateAuditCsv(mapping);
+            csvUrl = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+
+            renderResults(savedToDisk, outName);
+            show('results');
+        } catch (e) {
+            fail('Processing failed: ' + e.message);
+        }
+    });
+
+    // ---- results ----
+    let resultRows = [];
+
+    function renderResults(savedToDisk, outName) {
+        document.getElementById('s-total').textContent = mapping.total;
+        document.getElementById('s-matched').textContent = mapping.matched;
+        document.getElementById('s-missing').textContent = mapping.missing;
+        document.getElementById('s-new').textContent = mapping.newOnly;
+
+        const rw = document.getElementById('result-warnings');
+        rw.innerHTML = '';
+        for (const w of mapping.warnings)
+            rw.innerHTML += `<div class="warning"><strong>Note</strong>${esc(w)}</div>`;
+
+        const saved = document.getElementById('result-saved');
+        const dlImscc = document.getElementById('dl-imscc');
+        if (savedToDisk) {
+            saved.style.display = '';
+            saved.innerHTML = `Saved <strong>${esc(outName)}</strong> to the location you chose.`;
+            dlImscc.style.display = 'none';
+        } else {
+            saved.style.display = 'none';
+            dlImscc.style.display = '';
+            dlImscc.href = blobUrl;
+            dlImscc.download = outName;
+            dlImscc.textContent = 'Download Updated .imscc';
+        }
+        document.getElementById('next-step').innerHTML =
+            `<strong>Next step:</strong> in your <em>new</em> Canvas course, go to
+             <strong>Settings &rarr; Import Course Content</strong>, choose
+             &ldquo;Canvas Course Export Package&rdquo;, and upload
+             <strong>${esc(outName)}</strong>.`;
+        const dlCsv = document.getElementById('dl-csv');
+        dlCsv.href = csvUrl;
+        dlCsv.download = 'lti_audit_report.csv';
+
+        const order = { MISSING: 0, NEW_ONLY: 1, MATCHED: 2 };
+        resultRows = [...mapping.mappedLinks].sort((a, b) =>
+            (order[a.status] ?? 9) - (order[b.status] ?? 9) ||
+            a.resourceTitle.toLowerCase().localeCompare(b.resourceTitle.toLowerCase()));
+        renderTable();
+    }
+
+    function activeStatuses() {
+        return new Set([...document.querySelectorAll('.status-filter')]
+            .filter(cb => cb.checked).map(cb => cb.value));
+    }
+
+    function renderTable() {
+        const active = activeStatuses();
+        document.getElementById('results-tbody').innerHTML = resultRows
+            .filter(m => active.has(m.status))
+            .map(m => {
+                const cls = m.status === 'MATCHED' ? 'matched' : m.status === 'MISSING' ? 'missing' : 'newonly';
+                return `<tr>
+                    <td><span class="badge ${cls}">${m.status}</span></td>
+                    <td>${esc(m.resourceTitle)}</td>
+                    <td class="url">${esc(m.oldUrl)}</td>
+                    <td class="url">${esc(m.newUrl)}</td>
+                    <td>${esc(m.blockType)}</td>
+                    <td>${esc(m.location)}</td>
+                    <td>${esc(m.notes)}</td>
+                </tr>`;
+            }).join('');
+    }
+    for (const cb of document.querySelectorAll('.status-filter'))
+        cb.addEventListener('change', renderTable);
+
+    function resetAll() {
+        selected = []; setFiles([]);
+        closeReader();
+        revokeUrls();
+        canvasResult = null; olxResult = null; mapping = null; resultRows = [];
+        for (const cb of document.querySelectorAll('.status-filter')) cb.checked = true;
+        show('upload');
+    }
+</script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 /*
- * Streaming core for very large courses (PROOF OF CONCEPT)
+ * Streaming core for very large courses
  *
- * The non-streaming prototype (lti-core.js) holds the whole .imscc and the
+ * The non-streaming path (lti-core.js) holds the whole .imscc and the
  * whole rebuilt zip in memory — fine for small courses, fatal at 600MB+.
  *
  * This version keeps memory flat regardless of course size:
@@ -332,8 +332,10 @@
   // Canvas: streaming rewrite pass. Copies every entry to the output
   // ZipWriter; XML entries are rewritten, all others stream-copied.
   // ------------------------------------------------------------------
-  async function streamRewriteCanvas(zipReader, zipWriter, mapping) {
+  async function streamRewriteCanvas(zipReader, zipWriter, mapping, onProgress) {
     const entries = await zipReader.getEntries();
+    const totalEntries = entries.length;
+    let doneEntries = 0;
 
     const oldId = mapping.oldCourseId, newId = mapping.newCourseId;
     const oldBlk = oldId ? oldId.replace('course-v1:', 'block-v1:') : '';
@@ -353,6 +355,10 @@
 
     let updateCount = 0;
     for (const entry of entries) {
+      doneEntries++;
+      if (onProgress && (doneEntries % 25 === 0 || doneEntries === totalEntries)) {
+        try { onProgress(doneEntries, totalEntries); } catch (e) { /* UI only */ }
+      }
       if (entry.directory) {
         await zipWriter.add(entry.filename, null, { directory: true });
         continue;

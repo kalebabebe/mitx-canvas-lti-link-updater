@@ -1,0 +1,13 @@
+{
+  "name": "mitx-canvas-lti-link-updater",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dev dependencies for testing the browser (JS) pipeline against the Python pipeline. The app itself has no build step — vendor/zip-full.min.js is checked in.",
+  "scripts": {
+    "test": "node tests/parity_check.js"
+  },
+  "devDependencies": {
+    "@zip.js/zip.js": "2.7.45",
+    "@xmldom/xmldom": "^0.8.10"
+  }
+}

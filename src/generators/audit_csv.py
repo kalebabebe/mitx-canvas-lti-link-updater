@@ -54,7 +54,8 @@ def generate_audit_csv(mapping_result: MappingResult, output_dir: str,
     # Sort: MISSING first, then NEW_ONLY, then MATCHED
     sorted_links = sorted(
         mapping_result.mapped_links,
-        key=lambda x: (STATUS_SORT_ORDER.get(x.status, 99), x.resource_title.lower())
+        key=lambda x: (STATUS_SORT_ORDER.get(x.status, 99), x.resource_title.lower(),
+                       x.block_id, x.old_lti_url)
     )
 
     with open(output_path, 'w', newline='', encoding='utf-8') as f:
@@ -91,7 +92,8 @@ def generate_audit_csv_string(mapping_result: MappingResult) -> str:
 
     sorted_links = sorted(
         mapping_result.mapped_links,
-        key=lambda x: (STATUS_SORT_ORDER.get(x.status, 99), x.resource_title.lower())
+        key=lambda x: (STATUS_SORT_ORDER.get(x.status, 99), x.resource_title.lower(),
+                       x.block_id, x.old_lti_url)
     )
 
     writer = csv.DictWriter(output, fieldnames=CSV_COLUMNS)

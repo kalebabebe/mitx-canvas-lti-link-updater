@@ -318,9 +318,19 @@ class OLXParser:
                 seq_data = sequential_map.get(seq_id, {})
                 seq_name = seq_data.get('display_name', seq_id)
 
+                # Sequentials/verticals are themselves linkable blocks (the
+                # most common MITx LTI targets), so give them hierarchy
+                # context too — not just leaf components.
+                if seq_id in result.blocks:
+                    result.blocks[seq_id].chapter = ch_name
+
                 for vert_type, vert_id in seq_data.get('children', []):
                     vert_data = vertical_map.get(vert_id, {})
                     vert_name = vert_data.get('display_name', vert_id)
+
+                    if vert_id in result.blocks:
+                        result.blocks[vert_id].chapter = ch_name
+                        result.blocks[vert_id].sequential = seq_name
 
                     for comp_type, comp_id in vert_data.get('children', []):
                         if comp_id in result.blocks:

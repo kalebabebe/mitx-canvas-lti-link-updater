@@ -139,7 +139,8 @@ class LTIMapper:
         if result.missing_count > 0:
             result.warnings.append(
                 f'{result.missing_count} LTI link(s) reference blocks not found in the '
-                f'new edX course. These have been excluded from the updated export.'
+                f'new edX course. Their URLs are left unchanged in the updated export — '
+                f'fix or remove those links manually in Canvas after importing.'
             )
 
         if not result.old_course_id:

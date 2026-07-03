@@ -4,6 +4,7 @@
 <li><a href="#h_U01OVERVIEW">Overview</a></li>
 <li><a href="#h_U02EXPORTS">Getting Your Two Export Files</a></li>
 <li><a href="#h_U03WEB">Using the Online Tool</a></li>
+<li><a href="#h_U03TARGET">Advanced: Updating Without an MITx Export</a></li>
 <li><a href="#h_U04LOCAL">Running the Tool on Your Computer</a></li>
 <li><a href="#h_U05IMPORT">Importing Into Canvas</a></li>
 <li><a href="#h_U06REPORT">Understanding the Report</a></li>
@@ -50,7 +51,8 @@
 <p>This is the easiest option and works for courses of any size, including large ones.</p>
 
 <ol>
-  <li>Open the tool in your browser (your ET can give you the link)</li>
+  <li>Open the tool in your browser:
+    <a href="https://kalebabebe.github.io/mitx-canvas-lti-link-updater/">https://kalebabebe.github.io/mitx-canvas-lti-link-updater/</a></li>
   <li>Drag both files into the upload area, in any order, and click "Check Files"</li>
   <li>Review the confirmation screen — it shows which course your links point to now and where they'll point after the update. <strong>If anything looks unexpected, cancel and re-export the correct course.</strong> Nothing is changed until you confirm.</li>
   <li>Confirm. In Chrome or Edge you'll be asked where to save the updated file; in other browsers it downloads automatically. Then download the report if you want it.</li>
@@ -61,6 +63,30 @@
     <strong>Your files stay private.</strong> The online tool runs entirely in your
     browser — your course files are never uploaded to any server. For large courses,
     Chrome or Edge work best.
+  </p>
+</blockquote>
+
+<h2 id="h_U03TARGET"><strong>Advanced: Updating Without an MITx Export</strong></h2>
+
+<p>
+  If you can't get the new MITx course export but you know the new course is an
+  <strong>exact copy</strong> of the old one (a re-run or copy made by the MITx team —
+  the usual case for a new semester), the online tool has an advanced option:
+</p>
+
+<ol>
+  <li>On the tool's main page, expand <strong>"Advanced: don't have the new MITx export?"</strong> and tick the checkbox</li>
+  <li>Enter the new course's ID, for example <code>course-v1:MITx+course_name+3T2026</code> — your MITx course team contact can give you this</li>
+  <li>Drop in just the old Canvas export (<code>.imscc</code>) and continue as normal</li>
+</ol>
+
+<blockquote>
+  <p>
+    <strong>Note:</strong> In this mode the tool cannot check the links against the new
+    course, so the report is marked <strong>UNVERIFIED REWRITE</strong>. After importing,
+    click two or three MITx links in Student View to confirm they work. When possible,
+    prefer the standard two-file method — it's the only way to catch links to content
+    that doesn't exist in the new course.
   </p>
 </blockquote>
 

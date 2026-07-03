@@ -1,5 +1,5 @@
 /*
- * Canvas LTI Link Updater — client-side core (PROTOTYPE)
+ * Canvas LTI Link Updater — client-side core
  *
  * A JavaScript port of the Python pipeline (src/parsers, src/processors,
  * src/generators) that runs entirely in the browser. No server: files are
@@ -298,8 +298,11 @@
             }
           }
           if (found) {
+            // Mirror Python: only a <title> that is a DIRECT child of the
+            // document root counts (searching all descendants can pick up
+            // unrelated titles, e.g. the course title in course_settings.xml).
             let title = resId;
-            const titleEls = elementsByLocal(doc, 'title');
+            const titleEls = childrenByLocal(doc.documentElement, 'title');
             if (titleEls.length && text(titleEls[0])) title = text(titleEls[0]);
             const link = {
               resourceId: resId, title, launchUrl: found, xmlFile: href,
@@ -597,12 +600,71 @@
     if (result.missing > 0) {
       result.warnings.push(
         `${result.missing} LTI link(s) reference blocks not found in the new ` +
-        'edX course. These have been excluded from the updated export.');
+        'edX course. Their URLs are left unchanged in the updated export — ' +
+        'fix or remove those links manually in Canvas after importing.');
     }
     if (!result.oldCourseId) {
       result.warnings.push(
         'Could not determine the old edX course ID from the LTI URLs. ' +
         'URL replacement may not work correctly.');
+    }
+
+    return result;
+  }
+
+  // ------------------------------------------------------------------
+  // Unverified rewrite (mirrors cli.py blind_rewrite_mapping)
+  //
+  // Rewrites every LTI link's course identifiers to the target course
+  // WITHOUT verifying blocks against an edX export. Use only when the new
+  // course is an exact copy of the old one (same block IDs — true for
+  // Studio re-runs and export/import copies).
+  // ------------------------------------------------------------------
+  const TARGET_COURSE_ID_RE = /^course-v1:([^+]+)\+([^+]+)\+([^+]+)$/;
+
+  function blindRewriteMapping(ltiLinks, targetCourseId) {
+    const m = TARGET_COURSE_ID_RE.exec(targetCourseId);
+    if (!m) {
+      throw new Error('Target course ID must look like course-v1:ORG+COURSE+RUN ' +
+                      '(got: ' + targetCourseId + ')');
+    }
+    const newTriple = `${m[1]}+${m[2]}+${m[3]}`;
+
+    const result = {
+      mappedLinks: [], matched: 0, missing: 0, newOnly: 0,
+      total: ltiLinks.length, oldCourseId: '', newCourseId: targetCourseId,
+      warnings: [
+        'UNVERIFIED REWRITE: block IDs were not checked against an edX export. ' +
+        'Confirm the new course is an exact copy of the old one.',
+      ],
+    };
+
+    for (const link of ltiLinks) {
+      if (link.rawCourseId) {
+        if (!result.oldCourseId) result.oldCourseId = link.rawCourseId;
+        const oldTriple = link.rawCourseId.slice('course-v1:'.length);
+        const newUrl = link.launchUrl.split(oldTriple).join(newTriple);
+        result.mappedLinks.push({
+          status: 'MATCHED',
+          resourceTitle: link.title,
+          oldUrl: link.launchUrl, newUrl,
+          blockId: link.edxBlockId, blockType: link.edxBlockType,
+          location: '',
+          notes: 'Rewritten without verification (--target mode)',
+          resourceId: link.resourceId, xmlFile: link.xmlFile,
+        });
+        result.matched++;
+      } else {
+        result.mappedLinks.push({
+          status: 'MISSING',
+          resourceTitle: link.title,
+          oldUrl: link.launchUrl, newUrl: '',
+          blockId: '', blockType: '', location: '',
+          notes: 'No course ID in URL; left unchanged',
+          resourceId: link.resourceId, xmlFile: link.xmlFile,
+        });
+        result.missing++;
+      }
     }
 
     return result;
@@ -684,12 +746,14 @@
   }
 
   function generateAuditCsv(mapping) {
-    const rows = [...mapping.mappedLinks].sort((a, b) => {
-      const so = (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99);
-      if (so) return so;
-      return a.resourceTitle.toLowerCase() < b.resourceTitle.toLowerCase() ? -1
-           : a.resourceTitle.toLowerCase() > b.resourceTitle.toLowerCase() ? 1 : 0;
-    });
+    // Sort must stay in lockstep with audit_csv.py (incl. tiebreakers, so
+    // the output is deterministic regardless of block-discovery order).
+    const ord = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+    const rows = [...mapping.mappedLinks].sort((a, b) =>
+      ((STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99)) ||
+      ord(a.resourceTitle.toLowerCase(), b.resourceTitle.toLowerCase()) ||
+      ord(a.blockId, b.blockId) ||
+      ord(a.oldUrl, b.oldUrl));
     const lines = ['status,resource_title,old_lti_url,new_lti_url,block_id,block_type,edx_location,notes'];
     for (const r of rows) {
       lines.push([r.status, r.resourceTitle, r.oldUrl, r.newUrl, r.blockId,
@@ -739,7 +803,7 @@
   }
 
   return {
-    untarGz, parseCanvas, parseOLX, mapLinks,
+    untarGz, parseCanvas, parseOLX, mapLinks, blindRewriteMapping,
     generateUpdatedImscc, generateAuditCsv, identifyFile, runPipeline,
   };
 });

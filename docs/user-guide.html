@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>User Guide — MITx-Canvas LTI Link Updater</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="../style.css">
     <style>
         h2 { color: #003f5c; font-size: 17px; margin-top: 28px; margin-bottom: 8px; }
         h3 { color: #003f5c; font-size: 15px; margin-top: 18px; margin-bottom: 6px; }
@@ -21,7 +21,7 @@
 </head>
 <body>
 <div class="container">
-    <a class="back" href="index.html">&larr; Back to the tool</a>
+    <a class="back" href="../index.html">&larr; Back to the tool</a>
     <h1>MITx-Canvas LTI Link Updater — User Guide</h1>
 
     <h2>What this tool does</h2>
@@ -50,7 +50,7 @@
 
     <h2>Using the tool</h2>
     <ol>
-        <li>Drag both files into the box on the <a href="index.html">main page</a>, in any order, and click "Check Files"</li>
+        <li>Drag both files into the box on the <a href="../index.html">main page</a>, in any order, and click "Check Files"</li>
         <li>Review the confirmation screen — it shows which course your links point to now and where they'll point after the update. <strong>If anything looks unexpected, cancel and re-export the correct course.</strong> Nothing changes until you confirm.</li>
         <li>Confirm. In Chrome or Edge you'll choose where to save the updated file; other browsers download it automatically. Download the report too if you want it.</li>
     </ol>
@@ -77,6 +77,24 @@
         shows as MISSING. That's normal — it isn't a content link.
     </p>
 
+    <h2>Advanced: no MITx export? (unverified update)</h2>
+    <p>
+        If you can't get the new MITx course export but you know the new course is an
+        <strong>exact copy</strong> of the old one (a re-run or copy made by the MITx team —
+        the usual case for a new semester), you can use the advanced option on the main page:
+    </p>
+    <ol>
+        <li>Expand <strong>"Advanced: don't have the new MITx export?"</strong> and tick the checkbox</li>
+        <li>Enter the new course's ID, e.g. <code>course-v1:MITx+course_name+3T2026</code> — your MITx course team contact can give you this</li>
+        <li>Drop in just the old Canvas export (.imscc) and continue as normal</li>
+    </ol>
+    <p>
+        Because the tool can't check the links against the new course in this mode, the report
+        is marked <strong>UNVERIFIED REWRITE</strong>. After importing, click two or three MITx
+        links in Student View to confirm they work. If any don't, contact
+        <a href="mailto:mitx-support@mit.edu">mitx-support@mit.edu</a>.
+    </p>
+
     <h2>Troubleshooting</h2>
     <ul>
         <li><strong>"No MITx links found"</strong> — you probably exported the new Canvas course instead of the old one; the MITx links live in last semester's course.</li>
@@ -86,7 +104,7 @@
     </ul>
     <p>For anything else, email <a href="mailto:mitx-support@mit.edu">mitx-support@mit.edu</a> with a short description and, if you have it, the report from the tool.</p>
 
-    <div class="footer"><a href="index.html">&larr; Back to the tool</a></div>
+    <div class="footer"><a href="../index.html">&larr; Back to the tool</a></div>
 </div>
 </body>
 </html>
